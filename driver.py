@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import datetime
+from typing import Tuple
 
 import mipi
 import simple
@@ -36,7 +37,7 @@ def generate_includes(p: Panel, options: Options) -> str:
 		includes['drm'].add('display/drm_dsc.h')
 		includes['drm'].add('display/drm_dsc_helper.h')
 
-	for cmd in p.cmds.values():
+	for cmd in list(p.cmds.values()) + ([p.backlight_cmds] if p.backlight_cmds else []):
 		if 'MIPI_DCS_' in cmd.generated:
 			includes['video'].add('mipi_display.h')
 			break
@@ -347,8 +348,8 @@ static int {p.short_id}_bl_get_brightness(struct backlight_device *bl)
 	return s
 
 
-def generate_backlight_cmds(p: Panel, options: Options) -> str:
-	*cmds, last = p.backlight_cmds.seq
+def backlight_cmds_params(p: Panel, options: Options) -> Tuple[str, int, int]:
+	last = p.backlight_cmds.seq[-1]
 	if last.type in (mipi.Transaction.DCS_SHORT_WRITE_PARAM, mipi.Transaction.DCS_LONG_WRITE) \
 			and len(last.payload) >= 2:
 		method = 'mipi_dsi_dcs_write_var_seq_multi'
@@ -363,6 +364,13 @@ def generate_backlight_cmds(p: Panel, options: Options) -> str:
 	if brightness > max_brightness:
 		raise ValueError(f'Default brightness {brightness} is above the maximum brightness {max_brightness}')
 
+	return method, brightness, max_brightness
+
+
+def generate_backlight_cmds(p: Panel, options: Options) -> str:
+	*cmds, last = p.backlight_cmds.seq
+	method, brightness, max_brightness = backlight_cmds_params(p, options)
+
 	def wait(c: Command) -> str:
 		if c.wait and c.wait > options.ignore_wait:
 			return f'\t{dsi_msleep(c.wait)};\n'
@@ -370,7 +378,7 @@ def generate_backlight_cmds(p: Panel, options: Options) -> str:
 
 	body = ''
 	for c in cmds:
-		body += c.type.generate(c.payload, options) + '\n' + wait(c)
+		body += c.generated + '\n' + wait(c)
 	params = ['&dsi_ctx'] + [f'{b:#04x}' for b in last.payload[:-1]] + ['level']
 	body += wrap.join(f'\t{method}(', ',', ');', params) + '\n' + wait(last)
 
@@ -566,6 +574,11 @@ def generate_driver(p: Panel, options: Options) -> None:
 		for c in cmd.seq:
 			c.generated = c.type.generate(c.payload, options)
 			cmd.generated += c.generated
+
+	if p.backlight_cmds:
+		for c in p.backlight_cmds.seq[:-1]:
+			c.generated = c.type.generate(c.payload, options)
+			p.backlight_cmds.generated += c.generated
 
 	options.gpios = {}
 	if p.reset_seq:
