@@ -7,7 +7,7 @@ import mipi
 import simple
 import wrap
 from generator import Options, GpioFlag
-from panel import Panel, BacklightControl, CommandSequence, CompressionMode
+from panel import Panel, BacklightControl, Command, CommandSequence, CompressionMode
 
 
 def generate_includes(p: Panel, options: Options) -> str:
@@ -30,7 +30,7 @@ def generate_includes(p: Panel, options: Options) -> str:
 		includes['linux'].add('gpio/consumer.h')
 	if options.regulator:
 		includes['linux'].add('regulator/consumer.h')
-	if p.backlight == BacklightControl.DCS or options.backlight_fallback_dcs:
+	if p.backlight == BacklightControl.DCS or options.backlight_fallback_dcs or p.backlight_cmds:
 		includes['linux'].add('backlight.h')
 	if p.compression_mode == CompressionMode.DSC:
 		includes['drm'].add('display/drm_dsc.h')
@@ -273,6 +273,9 @@ static int {p.short_id}_unprepare(struct drm_panel *panel)
 
 
 def generate_backlight(p: Panel, options: Options) -> str:
+	if p.backlight_cmds:
+		return generate_backlight_cmds(p, options)
+
 	if p.backlight != BacklightControl.DCS and not options.backlight_fallback_dcs:
 		return ''
 
@@ -340,7 +343,71 @@ static int {p.short_id}_bl_get_brightness(struct backlight_device *bl)
 	else:
 		get_brightness = ''
 
+	s += generate_backlight_device(p, get_brightness, p.max_brightness or 255, p.max_brightness or 255)
+	return s
+
+
+def generate_backlight_cmds(p: Panel, options: Options) -> str:
+	*cmds, last = p.backlight_cmds.seq
+	if last.type in (mipi.Transaction.DCS_SHORT_WRITE_PARAM, mipi.Transaction.DCS_LONG_WRITE) \
+			and len(last.payload) >= 2:
+		method = 'mipi_dsi_dcs_write_var_seq_multi'
+	elif last.type in (mipi.Transaction.GENERIC_SHORT_WRITE_1_PARAM, mipi.Transaction.GENERIC_SHORT_WRITE_2_PARAM,
+					   mipi.Transaction.GENERIC_LONG_WRITE) and last.payload:
+		method = 'mipi_dsi_generic_write_var_seq_multi'
+	else:
+		raise ValueError(f'{options.backlight_cmds}: cannot write the brightness level with {last}')
+
+	max_brightness = options.backlight_max or min(p.max_brightness or 255, 255)
+	brightness = max_brightness if options.backlight_default is None else options.backlight_default
+	if brightness > max_brightness:
+		raise ValueError(f'Default brightness {brightness} is above the maximum brightness {max_brightness}')
+
+	def wait(c: Command) -> str:
+		if c.wait and c.wait > options.ignore_wait:
+			return f'\t{dsi_msleep(c.wait)};\n'
+		return ''
+
+	body = ''
+	for c in cmds:
+		body += c.type.generate(c.payload, options) + '\n' + wait(c)
+	params = ['&dsi_ctx'] + [f'{b:#04x}' for b in last.payload[:-1]] + ['level']
+	body += wrap.join(f'\t{method}(', ',', ');', params) + '\n' + wait(last)
+
+	s = f'''\
+static int {p.short_id}_bl_update_status(struct backlight_device *bl)
+{{
+	struct mipi_dsi_device *dsi = bl_get_data(bl);
+'''
+	if options.backlight_gpio:
+		s += f'\tstruct {p.short_id} *ctx = mipi_dsi_get_drvdata(dsi);\n'
+
+	s += '''\
+	struct mipi_dsi_multi_context dsi_ctx = { .dsi = dsi };
+	u8 level = backlight_get_brightness(bl);
+'''
+
+	if options.backlight_gpio:
+		s += '''
+	gpiod_set_value_cansleep(ctx->backlight_gpio, !!level);
+'''
+
 	s += f'''
+	dsi->mode_flags &= ~MIPI_DSI_MODE_LPM;
+
+{body}
+	dsi->mode_flags |= MIPI_DSI_MODE_LPM;
+
+	return dsi_ctx.accum_err;
+}}
+'''
+
+	s += generate_backlight_device(p, '', brightness, max_brightness)
+	return s
+
+
+def generate_backlight_device(p: Panel, get_brightness: str, brightness: int, max_brightness: int) -> str:
+	s = f'''
 static const struct backlight_ops {p.short_id}_bl_ops = {{
 	.update_status = {p.short_id}_bl_update_status,{get_brightness}
 }};
@@ -352,8 +419,8 @@ static struct backlight_device *
 	struct device *dev = &dsi->dev;
 	const struct backlight_properties props = {{
 		.type = BACKLIGHT_RAW,
-		.brightness = {p.max_brightness or 255},
-		.max_brightness = {p.max_brightness or 255},
+		.brightness = {brightness},
+		.max_brightness = {max_brightness},
 	}};
 
 	return devm_backlight_device_register(dev, dev_name(dev), dev, dsi,
@@ -438,7 +505,7 @@ static int {p.short_id}_probe(struct mipi_dsi_device *dsi)
 					     "Failed to create backlight\\n");
 	}}
 '''
-	elif p.backlight == BacklightControl.DCS:
+	elif p.backlight == BacklightControl.DCS or p.backlight_cmds:
 		s += f'''
 	ctx->panel.backlight = {p.short_id}_create_backlight(dsi);
 	if (IS_ERR(ctx->panel.backlight))

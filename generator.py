@@ -18,6 +18,9 @@ class Options:
 	backlight: bool
 	backlight_gpio: bool
 	backlight_fallback_dcs: bool
+	backlight_cmds: Optional[str]
+	backlight_max: Optional[int]
+	backlight_default: Optional[int]
 	dcs_get_brightness: bool
 	ignore_wait: int
 	dumb_dcs: bool

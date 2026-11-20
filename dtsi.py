@@ -4,7 +4,7 @@ from panel import Panel, BacklightControl
 
 
 def generate_backlight(p: Panel):
-	if p.backlight == BacklightControl.DCS:
+	if p.backlight == BacklightControl.DCS or p.backlight_cmds:
 		return ""
 	return "\t\tbacklight = <&backlight>;\n"
 

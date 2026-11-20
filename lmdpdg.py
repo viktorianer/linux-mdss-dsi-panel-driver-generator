@@ -48,6 +48,18 @@ parser.add_argument('--backlight-fallback-dcs', action='store_true', help="""
 	Generate code for both custom backlight and DCS backlight. DCS backlight
 	is used if no 'backlight' is defined in the device tree.
 """)
+parser.add_argument('--backlight-cmds', metavar='PROPERTY', help="""
+	Set the brightness with the vendor command sequence in the given property of the
+	panel node (e.g. samsung,tft_pwm_tx_cmds_revA), instead of MIPI DCS brightness.
+	The last byte of the last command is replaced by the brightness level.
+""")
+parser.add_argument('--backlight-max', type=int, metavar='LEVEL', help="""
+	Maximum brightness level for --backlight-cmds (default: qcom,mdss-dsi-bl-max-level,
+	limited to 255).
+""")
+parser.add_argument('--backlight-default', type=int, metavar='LEVEL', help="""
+	Initial brightness level for --backlight-cmds (default: the maximum level).
+""")
 parser.add_argument('--dcs-no-get-brightness', dest='dcs_get_brightness', action='store_false', default=True, help="""
 	Do not generate get_brightness() function for DCS backlight/brightness code.
 	Some panels do not implement the MIPI DCS Get Display Brightness command correctly.
@@ -65,6 +77,12 @@ parser.add_argument('--dumb-dcs', dest='dumb_dcs', action='store_true', help="""
 	any panel ideally).
 """)
 args = parser.parse_args(namespace=generator.Options())
+if (args.backlight_max is not None or args.backlight_default is not None) and not args.backlight_cmds:
+	parser.error("--backlight-max and --backlight-default require --backlight-cmds")
+if args.backlight_max is not None and not 0 < args.backlight_max <= 255:
+	parser.error("--backlight-max must be between 1 and 255")
+if args.backlight_default is not None and not 0 <= args.backlight_default <= 255:
+	parser.error("--backlight-default must be between 0 and 255")
 
 for f in args.dtb:
 	with f:
@@ -74,7 +92,7 @@ for f in args.dtb:
 		found = False
 		for offset in Panel.find(fdt):
 			try:
-				panel = Panel.parse(fdt, offset)
+				panel = Panel.parse(fdt, offset, args.backlight_cmds if args.backlight else None)
 				if panel:
 					generate(panel, args)
 					found = True

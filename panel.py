@@ -141,13 +141,18 @@ class CommandSequence:
 		LP_MODE = 'dsi_lp_mode'
 		HS_MODE = 'dsi_hs_mode'
 
-	def __init__(self, fdt: Fdt2, node: int, cmd: str) -> None:
-		self.state = CommandSequence.State(fdt.getprop(node, f'qcom,mdss-dsi-{cmd}-command-state').as_str())
+	def __init__(self, fdt: Fdt2, node: int, cmd: str, prop_name: Optional[str] = None) -> None:
 		self.seq = []
 
-		prop = fdt.getprop_or_none(node, f'qcom,mdss-dsi-{cmd}-command')
+		if prop_name is None:
+			self.state = CommandSequence.State(fdt.getprop(node, f'qcom,mdss-dsi-{cmd}-command-state').as_str())
+			prop_name = f'qcom,mdss-dsi-{cmd}-command'
+		else:
+			self.state = None
+
+		prop = fdt.getprop_or_none(node, prop_name)
 		if prop is None:
-			print(f'Warning: qcom,mdss-dsi-{cmd}-command does not exist')
+			print(f'Warning: {prop_name} does not exist')
 			return  # No commands
 		itr = iter(prop)
 
@@ -211,7 +216,7 @@ def _find_mode_node(fdt: Fdt2, node: int) -> int:
 
 
 class Panel:
-	def __init__(self, name: str, fdt: Fdt2, node: int) -> None:
+	def __init__(self, name: str, fdt: Fdt2, node: int, backlight_cmds: Optional[str] = None) -> None:
 		self.name = name
 		self.node_name = fdt.get_name(node)
 		self.id = _remove_before(_remove_prefixes(self.node_name, 'qcom,mdss_dsi_', 'ss_dsi_panel_', 'mot_').lower(), ',')
@@ -237,6 +242,12 @@ class Panel:
 		if self.backlight == BacklightControl.DCS and self.max_brightness is None:
 			print("WARNING: DCS backlight without maximum brightness, ignoring...")
 			self.backlight = None
+
+		self.backlight_cmds = None
+		if backlight_cmds:
+			cmds = CommandSequence(fdt, node, 'backlight', backlight_cmds)
+			if cmds.seq:
+				self.backlight_cmds = cmds
 
 		self.lanes = 0
 		while fdt.getprop_or_none(node, f'qcom,mdss-dsi-lane-{self.lanes}-state') is not None:
@@ -330,9 +341,9 @@ class Panel:
 			self.dsc_scr_version = fdt.getprop_uint32(mode_node, 'qcom,mdss-dsc-scr-version', default=0)
 
 	@staticmethod
-	def parse(fdt: Fdt2, node: int) -> Panel:
+	def parse(fdt: Fdt2, node: int, backlight_cmds: Optional[str] = None) -> Panel:
 		name = fdt.getprop_or_none(node, 'qcom,mdss-dsi-panel-name')
-		return name and Panel(name.as_str(), fdt, node)
+		return name and Panel(name.as_str(), fdt, node, backlight_cmds)
 
 	@staticmethod
 	def find(fdt: Fdt2) -> Iterator[int]:
