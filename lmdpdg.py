@@ -7,7 +7,7 @@ import sys
 import traceback
 
 import generator
-from driver import backlight_cmds_params, generate_driver
+from driver import prepare_backlight_cmds, generate_driver
 from dtsi import generate_panel_dtsi
 from fdt2 import Fdt2
 from lk import generate_lk_driver
@@ -19,7 +19,7 @@ def generate(p: Panel, options: generator.Options) -> None:
 	print(f"Generating: {p.id} ({p.name})")
 
 	if p.backlight_cmds:
-		backlight_cmds_params(p, options)
+		prepare_backlight_cmds(p, options)
 
 	if os.path.exists(p.id):
 		shutil.rmtree(p.id)

@@ -348,8 +348,12 @@ static int {p.short_id}_bl_get_brightness(struct backlight_device *bl)
 	return s
 
 
-def backlight_cmds_params(p: Panel, options: Options) -> Tuple[str, int, int]:
-	last = p.backlight_cmds.seq[-1]
+def prepare_backlight_cmds(p: Panel, options: Options) -> Tuple[str, int, int]:
+	*cmds, last = p.backlight_cmds.seq
+	for c in cmds:
+		c.generated = c.type.generate(c.payload, options)
+	p.backlight_cmds.generated = ''.join(c.generated for c in cmds)
+
 	if last.type in (mipi.Transaction.DCS_SHORT_WRITE_PARAM, mipi.Transaction.DCS_LONG_WRITE) \
 			and len(last.payload) >= 2:
 		method = 'mipi_dsi_dcs_write_var_seq_multi'
@@ -369,7 +373,7 @@ def backlight_cmds_params(p: Panel, options: Options) -> Tuple[str, int, int]:
 
 def generate_backlight_cmds(p: Panel, options: Options) -> str:
 	*cmds, last = p.backlight_cmds.seq
-	method, brightness, max_brightness = backlight_cmds_params(p, options)
+	method, brightness, max_brightness = prepare_backlight_cmds(p, options)
 
 	def wait(c: Command) -> str:
 		if c.wait and c.wait > options.ignore_wait:
@@ -581,9 +585,7 @@ def generate_driver(p: Panel, options: Options) -> None:
 			cmd.generated += c.generated
 
 	if p.backlight_cmds:
-		for c in p.backlight_cmds.seq[:-1]:
-			c.generated = c.type.generate(c.payload, options)
-			p.backlight_cmds.generated += c.generated
+		prepare_backlight_cmds(p, options)
 
 	options.gpios = {}
 	if p.reset_seq:
