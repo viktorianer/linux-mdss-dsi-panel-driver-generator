@@ -403,11 +403,16 @@ static int {p.short_id}_bl_update_status(struct backlight_device *bl)
 	s += f'''
 	dsi->mode_flags &= ~MIPI_DSI_MODE_LPM;
 
-{body}
-	dsi->mode_flags |= MIPI_DSI_MODE_LPM;
+{body}'''
 
+	if 'MIPI_DSI_MODE_LPM' in p.flags:
+		s += '''
+	dsi->mode_flags |= MIPI_DSI_MODE_LPM;
+'''
+
+	s += '''
 	return dsi_ctx.accum_err;
-}}
+}
 '''
 
 	s += generate_backlight_device(p, '', brightness, max_brightness)
